@@ -1,0 +1,144 @@
+# Alacritty — MatteBlack (matchar din DWM)
+# Plats: ~/.config/alacritty/alacritty.toml
+
+[env]
+TERM = "alacritty"
+
+[window]
+# Liten, jämn “air gap” som passar DWM
+padding.x = 6
+padding.y = 6
+dynamic_padding = true
+decorations = "Full"
+opacity = 1.0  # 1.0 = helt opakt (ändra till t.ex. 0.95 om du vill ha lätt glas)
+dynamic_title = true
+
+# Wayland-användare kan sätta:
+# [window]
+# startup_mode = "Windowed"  # eller "Maximized"/"Fullscreen"
+# blur = true                # funkar om din compositor stödjer det
+
+[scrolling]
+history = 10000
+multiplier = 3
+
+[font]
+size = 6
+
+[font.normal]
+family = "JetBrainsMono Nerd Font"
+style = "Regular"
+
+[font.bold]
+family = "JetBrainsMono Nerd Font"
+style = "Bold"
+
+[font.italic]
+family = "JetBrainsMono Nerd Font"
+style = "Italic"
+
+# Finjustering om tecken ser för kompakta ut
+# [font.offset]
+# x = 0
+# y = 0
+
+[cursor]
+unfocused_hollow = true
+
+[cursor.style]
+shape = "Block"
+blinking = "Off"
+
+[bell]
+animation = "EaseOutExpo"
+duration = 0        # 0 = tyst, ingen flash
+color = "0x5a5a60"  # används bara om duration > 0
+
+[selection]
+semantic_escape_chars = ",│`|:\"' ()[]{}<>\t"
+save_to_clipboard = true
+
+[mouse]
+hide_when_typing = true
+
+# --------- FÄRGER: MatteBlack (från din DWM) ----------
+[colors.primary]
+background = "0x0f0f10"
+foreground = "0xe5e5e5"
+
+[colors.cursor]
+text   = "0x0f0f10"
+cursor = "0xe5e5e5"
+
+[colors.selection]
+text       = "0xe5e5e5"
+background = "0x3a3a3d"
+
+[colors.normal]
+black   = "0x0f0f10"
+red     = "0x3a3a3d"
+green   = "0x2a2a2d"
+yellow  = "0x5a5a60"
+blue    = "0xa8a8a8"
+magenta = "0xe5e5e5"
+cyan    = "0x5a5a60"
+white   = "0xe5e5e5"
+
+[colors.bright]
+black   = "0x0f0f10"
+red     = "0x3a3a3d"
+green   = "0x2a2a2d"
+yellow  = "0x5a5a60"
+blue    = "0xa8a8a8"
+magenta = "0xe5e5e5"
+cyan    = "0x5a5a60"
+white   = "0xe5e5e5"
+
+# (Valfritt) Matcha även hints/grep-liknande overlays i gråskala
+[colors.hints.start]
+foreground = "0x0f0f10"
+background = "0xa8a8a8"
+
+[colors.hints.end]
+foreground = "0xa8a8a8"
+background = "0x0f0f10"
+
+# --------- Smidiga keybinds ----------
+# Kopiera/klistra, zoom, nytt fönster m.m.
+[[keyboard.bindings]]
+key = "C"
+mods = "Control|Shift"
+action = "Copy"
+
+[[keyboard.bindings]]
+key = "V"
+mods = "Control|Shift"
+action = "Paste"
+
+[[keyboard.bindings]]
+key = "Equals"
+mods = "Control"
+action = "IncreaseFontSize"
+
+[[keyboard.bindings]]
+key = "Minus"
+mods = "Control"
+action = "DecreaseFontSize"
+
+[[keyboard.bindings]]
+key = "Key0"
+mods = "Control"
+action = "ResetFontSize"
+
+# Ctrl+Shift+N för nytt Alacritty-fönster (bra i DWM)
+[[keyboard.bindings]]
+key = "N"
+mods = "Control|Shift"
+action = "SpawnNewInstance"
+
+# Ctrl+Shift+S för snabb skärmdump (om grim/slurp finns i PATH)
+# [[keyboard.bindings]]
+# key = "S"
+# mods = "Control|Shift"
+# command = { program = "grimshot", args = ["savecopy", "area"] }
+
