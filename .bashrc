@@ -48,6 +48,13 @@ if command -v dircolors >/dev/null 2>&1; then
   eval "$(dircolors -b 2>/dev/null || true)"
 fi
 
+# fi = files, ex = executable
+LS_COLORS="${LS_COLORS}:fi=38;5;246:ex=1;97:di=38;5;250:ln=38;5;245:pi=38;5;242:so=38;5;242:bd=38;5;241:cd=38;5;241:or=1;91:mi=1;91"
+export LS_COLORS
+
+# eza
+export EXA_COLORS="perms=38;5;243; dim=1; date=38;5;244; size=38;5;244; inode=38;5;240"
+
 # 7) Filesystem & text helpers (aliases kept conservative/safe)
 if command -v eza >/dev/null 2>&1; then
   alias ls='eza --group-directories-first --icons=auto'
