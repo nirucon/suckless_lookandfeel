@@ -1,2 +1,2 @@
-# suckless_themedots
+# suckless_lookandfeel
 theming and dotfiles for my alpi suckless setup...
