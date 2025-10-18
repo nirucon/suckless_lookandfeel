@@ -1,2 +1,2 @@
 
-@theme "/usr/share/rofi/themes/Black-Metal.rasi"
+@theme "~/.local/share/rofi/themes/Black-Metal.rasi"
