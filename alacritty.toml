@@ -61,7 +61,7 @@ save_to_clipboard = true
 [mouse]
 hide_when_typing = true
 
-# --------- FÄRGER: MatteBlack (från din DWM) ----------
+# --------- FÄRGER: MatteBlack + Nord Blue Accents ----------
 [colors.primary]
 background = "0x0f0f10"
 foreground = "0xe5e5e5"
@@ -76,31 +76,30 @@ background = "0x3a3a3d"
 
 [colors.normal]
 black   = "0x0f0f10"
-red     = "0x3a3a3d"
-green   = "0x2a2a2d"
-yellow  = "0x5a5a60"
+red     = "0x88c0d0"  # Nord blue - synlig!
+green   = "0x5e81ac"  # Mörkare blå
+yellow  = "0x81a1c1"  # Medium blå
 blue    = "0xa8a8a8"
 magenta = "0xe5e5e5"
-cyan    = "0x5a5a60"
+cyan    = "0x8fbcbb"  # Nord cyan - synlig!
 white   = "0xe5e5e5"
 
 [colors.bright]
 black   = "0x0f0f10"
-red     = "0x3a3a3d"
-green   = "0x2a2a2d"
-yellow  = "0x5a5a60"
+red     = "0x88c0d0"  # Nord blue
+green   = "0x5e81ac"  # Mörkare blå
+yellow  = "0x81a1c1"  # Medium blå
 blue    = "0xa8a8a8"
 magenta = "0xe5e5e5"
-cyan    = "0x5a5a60"
+cyan    = "0x8fbcbb"  # Nord cyan
 white   = "0xe5e5e5"
 
-# (Valfritt) Matcha även hints/grep-liknande overlays i gråskala
 [colors.hints.start]
 foreground = "0x0f0f10"
-background = "0xa8a8a8"
+background = "0x88c0d0"
 
 [colors.hints.end]
-foreground = "0xa8a8a8"
+foreground = "0x88c0d0"
 background = "0x0f0f10"
 
 # --------- Smidiga keybinds ----------
