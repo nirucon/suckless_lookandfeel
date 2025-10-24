@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DWM status bar for Arch Linux
 # ------------------------------------------------------------
-# Shows (left → right): VOLUME | BATTERY | WIFI-SSID | NEXTCLOUD | DATE | TIME
+# Shows (left → right): VOLUME | BATTERY | TEMP | WIFI-SSID+SIGNAL | BLUETOOTH | MUSIC | NEXTCLOUD | UPDATES | DISK | DATE | TIME
 # The bar is resilient: each part tolerates missing tools and falls back to "n/a".
 #
 # Design goals:
@@ -9,6 +9,12 @@
 # - No racing at boot: waits for NetworkManager to be "connected".
 # - SSID via ACTIVE connection (nmcli), not via scan list.
 # - Minimal dependencies; graceful degradation.
+# - Event-driven volume updates (fast response to volume key presses).
+# - Dynamic parts: music, updates, disk only shown when relevant.
+#
+# Dependencies (install if missing):
+#   pacman-contrib  (for checkupdates)
+#   playerctl       (for music info from cmus/spotify/mpv)
 #
 # Environment variables (optional):
 #   DWM_STATUS_ICONS=1        # 1 = use icons when possible (default), 0 = text-only
@@ -16,6 +22,9 @@
 #   DWM_STATUS_INTERVAL=10    # refresh interval (seconds)
 #   DWM_STATUS_WIFI_CMD=iwgetid|nmcli  # force SSID source
 #   DWM_STATUS_NET_PING=1.1.1.1        # ping target for connectivity (default 1.1.1.1)
+#   DWM_STATUS_TEMP_WARN=75   # CPU temp warning threshold (°C)
+#   DWM_STATUS_DISK_WARN=15   # Disk usage warning threshold (%)
+#   DWM_STATUS_UPDATES_CACHE=1800  # Updates cache time (seconds, default 30min)
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -29,11 +38,23 @@ PING="/usr/bin/ping"
 DATE="/usr/bin/date"
 XSETROOT="/usr/bin/xsetroot"
 WPCTL="/usr/bin/wpctl"
+PACTL="/usr/bin/pactl"
 GREP="/usr/bin/grep"
 SED="/usr/bin/sed"
+PLAYERCTL="/usr/bin/playerctl"
+CHECKUPDATES="/usr/bin/checkupdates"
+BLUETOOTHCTL="/usr/bin/bluetoothctl"
+DF="/usr/bin/df"
 
 # Ensure a sane PATH for any sub-processes (keeps user overrides last)
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# -----------------------------
+# Configuration
+# -----------------------------
+TEMP_WARN=${DWM_STATUS_TEMP_WARN:-75}
+DISK_WARN=${DWM_STATUS_DISK_WARN:-15}
+UPDATES_CACHE=${DWM_STATUS_UPDATES_CACHE:-1800}
 
 # -----------------------------
 # Helpers
@@ -46,7 +67,7 @@ trim() { $SED 's/^[[:space:]]\+//;s/[[:space:]]\+$//'; }
 # Icon / text mode
 # -----------------------------
 ICONS=${DWM_STATUS_ICONS:-1}
-ASSUME=${DWM_STATUS_ASSUME_ICONS:-0}
+ASSUME=${DWM_STATUS_ASSUME_ICONS:-1}
 
 use_icons() {
   # If you KNOW you run a Nerd Font in the bar, set ASSUME=1 to always use icons.
@@ -57,34 +78,45 @@ use_icons() {
 # -----------------------------
 # Glyphs (Nerd Font). Text fallbacks are used in each part function.
 # -----------------------------
-icon_bat() { printf ''; }        # battery default (level-specific used below)
-icon_plug() { printf ''; }       # AC/charging
-icon_wifi() { printf ''; }       # Wi-Fi
-icon_cloud() { printf ''; }      # Nextcloud online
-icon_cloud_sync() { printf '󰓦'; } # Nextcloud syncing
-icon_cloud_off() { printf '󰅛'; }  # Nextcloud offline
-icon_spk() { printf ''; }        # volume
-icon_spk_mute() { printf '󰝟'; }   # clearer mute icon
-icon_sep() { printf ' | '; }      # separator
+icon_bat() { echo -ne '\uf240'; }        # battery default (level-specific used below)
+icon_plug() { echo -ne '\uf1e6'; }       # AC/charging
+icon_wifi() { echo -ne '\uf1eb'; }       # Wi-Fi
+icon_cloud() { echo -ne '\uf0c2'; }      # Nextcloud online
+icon_cloud_sync() { echo -ne '\uf021'; } # Nextcloud syncing
+icon_cloud_off() { echo -ne '\uf127'; }  # Nextcloud offline
+icon_spk() { echo -ne '\uf028'; }        # volume
+icon_spk_mute() { echo -ne '\uf6a9'; }   # clearer mute icon
+icon_bt() { echo -ne '\uf293'; }         # bluetooth
+icon_music() { echo -ne '\u266b'; }      # music playing
+icon_temp() { echo -ne '\uf2db'; }       # temperature
+icon_fire() { echo -ne '\U1f525'; }      # temperature warning
+icon_updates() { echo -ne '\u2191'; }    # updates available
+icon_disk() { echo -ne '\u26a0'; }       # disk warning
+icon_sep() { echo -ne ' | '; }           # separator
+
+# -----------------------------
+# Signal handling for fast volume updates
+# -----------------------------
+FORCE_UPDATE=0
+trap 'FORCE_UPDATE=1' SIGUSR1
 
 # -----------------------------
 # Volume (PipeWire via wpctl)
 # -----------------------------
 volume_part() {
   if ! has_bin "$WPCTL"; then
-    use_icons && printf " n/a" || printf "Vol: n/a"
+    use_icons && printf " n/a" || printf "Vol: n/a"
     return
   fi
   local line mute vol pct
   line=$("$WPCTL" get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || true)
   # Typical outputs:
-  #  "Volume: 0.34 [0.00, 1.00]"
-  #  "Volume: 0.34 [0.00, 1.00] MUTE"
-  #  "Volume: 0.34 [0.00, 1.00] Mute: true"
-  mute=$(printf '%s\n' "$line" | $GREP -Eoi '(MUTE|Mute:\s*true)' | head -n1 || true)
+  #  "Volume: 0.34"
+  #  "Volume: 0.34 [MUTED]"
+  mute=$(printf '%s\n' "$line" | $GREP -Eoi 'MUTED' | head -n1 || true)
   vol=$(printf '%s\n' "$line" | $AWK '/Volume:/ {print $2}')
   if [ -z "${vol:-}" ]; then
-    use_icons && printf " n/a" || printf "Vol: n/a"
+    use_icons && printf " n/a" || printf "Vol: n/a"
     return
   fi
   pct=$($AWK -v v="$vol" 'BEGIN{printf("%d", v*100+0.5)}')
@@ -96,6 +128,24 @@ volume_part() {
 }
 
 # -----------------------------
+# Volume event listener (background process)
+# Monitors PipeWire/PulseAudio events and sends SIGUSR1 to main process
+# -----------------------------
+volume_listener() {
+  local main_pid=$1
+  if ! has_bin "$PACTL"; then return; fi
+
+  # pactl subscribe gives us real-time audio events
+  "$PACTL" subscribe 2>/dev/null | while read -r line; do
+    # Look for sink (output device) changes
+    if printf '%s' "$line" | $GREP -qi "sink"; then
+      # Send signal to main process for immediate update
+      kill -SIGUSR1 "$main_pid" 2>/dev/null || exit 0
+    fi
+  done
+}
+
+# -----------------------------
 # Battery (AC + level + icon)
 # -----------------------------
 battery_part() {
@@ -103,7 +153,7 @@ battery_part() {
   dir=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n1 || true)
   ac=$(ls -d /sys/class/power_supply/AC* /sys/class/power_supply/ACAD* 2>/dev/null | head -n1 || true)
   if [ -z "${dir:-}" ] || [ ! -r "$dir/capacity" ]; then
-    use_icons && printf " n/a" || printf "Bat: n/a"
+    use_icons && printf " n/a" || printf "Bat: n/a"
     return
   fi
   cap=$(cat "$dir/capacity" 2>/dev/null || echo 0)
@@ -119,14 +169,16 @@ battery_part() {
   # Choose a battery glyph by level
   local lvl=$cap
   if [ "$lvl" -ge 95 ]; then
-    glyph=''
+    glyph=$(echo -ne '\uf240')
   elif [ "$lvl" -ge 75 ]; then
-    glyph=''
+    glyph=$(echo -ne '\uf241')
   elif [ "$lvl" -ge 55 ]; then
-    glyph=''
+    glyph=$(echo -ne '\uf242')
   elif [ "$lvl" -ge 35 ]; then
-    glyph=''
-  else glyph=''; fi
+    glyph=$(echo -ne '\uf243')
+  else
+    glyph=$(echo -ne '\uf244')
+  fi
 
   if [ "$online" = "1" ] || [ "$stat" = "Charging" ]; then
     use_icons && printf "%s %s%%" "$(icon_plug)" "$cap" || printf "Bat+: %s%%" "$cap"
@@ -136,41 +188,150 @@ battery_part() {
 }
 
 # -----------------------------
-# Wi-Fi SSID (nmcli active connection → iwgetid → iw)
-# Uses absolute paths and retries a few times for early-boot races.
+# CPU Temperature
+# -----------------------------
+temp_part() {
+  local temp_file temp_c
+  # Find first thermal zone
+  temp_file=$(ls /sys/class/thermal/thermal_zone*/temp 2>/dev/null | head -n1 || true)
+  if [ -z "$temp_file" ] || [ ! -r "$temp_file" ]; then
+    use_icons && printf " n/a" || printf "Temp: n/a"
+    return
+  fi
+
+  # Read temp (in millidegrees) and convert to Celsius
+  temp_c=$(cat "$temp_file" 2>/dev/null || echo 0)
+  temp_c=$($AWK -v t="$temp_c" 'BEGIN{printf("%d", t/1000)}')
+
+  # Show warning icon if temp exceeds threshold
+  if [ "$temp_c" -ge "$TEMP_WARN" ]; then
+    use_icons && printf "%s %s°C" "$(icon_fire)" "$temp_c" || printf "Temp!: %s°C" "$temp_c"
+  else
+    use_icons && printf "%s %s°C" "$(icon_temp)" "$temp_c" || printf "Temp: %s°C" "$temp_c"
+  fi
+}
+
+# -----------------------------
+# Wi-Fi SSID + Signal Strength
+# Uses nmcli for both SSID and signal percentage
 # -----------------------------
 ssid_part() {
-  local ssid="" forced=${DWM_STATUS_WIFI_CMD:-}
+  local ssid="" signal="" forced=${DWM_STATUS_WIFI_CMD:-}
   local tries
 
-  # 1) nmcli: read the active Wi-Fi connection (not the scan list)
-  if [ -z "$ssid" ] && has_bin "$NMCLI" && { [ -z "${forced:-}" ] || [ "$forced" = "nmcli" ]; }; then
+  # 1) nmcli: read the active Wi-Fi connection name and signal
+  if has_bin "$NMCLI" && { [ -z "${forced:-}" ] || [ "$forced" = "nmcli" ]; }; then
     for tries in 1 2 3; do
-      ssid=$("$NMCLI" -t -f NAME,TYPE connection show --active |
-        "$AWK" -F: '$2=="802-11-wireless"{print $1; exit}')
-      [ -n "$ssid" ] && break
+      # Get active connection name
+      ssid=$("$NMCLI" -t -f NAME,TYPE connection show --active 2>/dev/null |
+        "$AWK" -F: '$2=="802-11-wireless"{print $1; exit}' || true)
+
+      # Get signal strength for active connection
+      if [ -n "$ssid" ]; then
+        signal=$("$NMCLI" -t -f IN-USE,SIGNAL dev wifi 2>/dev/null |
+          "$GREP" '^\*' | "$AWK" -F: '{print $2}' || true)
+        break
+      fi
       sleep 1
     done
   fi
 
-  # 2) iwgetid: simple fallback (needs wireless_tools)
+  # 2) iwgetid fallback (no signal info available with this method)
   if [ -z "$ssid" ] && [ "${forced:-}" = "iwgetid" ] && has_bin "$IWGETID"; then
     ssid=$("$IWGETID" -r 2>/dev/null || true)
   elif [ -z "$ssid" ] && has_bin "$IWGETID" && [ -z "${forced:-}" ]; then
     ssid=$("$IWGETID" -r 2>/dev/null || true)
   fi
 
-  # 3) iw: last resort (if installed)
+  # 3) iw fallback (can get signal in dBm, convert to %)
   if [ -z "$ssid" ] && has_bin "$IW"; then
     local dev
-    dev=$("$IW" dev | "$AWK" '/Interface/ {print $2; exit}')
+    dev=$("$IW" dev 2>/dev/null | "$AWK" '/Interface/ {print $2; exit}' || true)
     if [ -n "$dev" ]; then
-      ssid=$("$IW" dev "$dev" link 2>/dev/null | $SED -n 's/^[[:space:]]*SSID: //p')
+      ssid=$("$IW" dev "$dev" link 2>/dev/null | $SED -n 's/^[[:space:]]*SSID: //p' || true)
+      # Get signal in dBm and convert to approximate %
+      local dbm
+      dbm=$("$IW" dev "$dev" link 2>/dev/null | "$GREP" 'signal:' | "$AWK" '{print $2}' || true)
+      if [ -n "$dbm" ]; then
+        # Rough conversion: -90 dBm = 0%, -30 dBm = 100%
+        signal=$($AWK -v d="$dbm" 'BEGIN{s=2*(d+100); if(s<0)s=0; if(s>100)s=100; printf("%d",s)}')
+      fi
     fi
   fi
 
   [ -z "$ssid" ] && ssid="n/a"
-  use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "Net: %s" "$ssid"
+
+  if [ -n "$signal" ]; then
+    use_icons && printf "%s %s %s%%" "$(icon_wifi)" "$ssid" "$signal" || printf "Net: %s %s%%" "$ssid" "$signal"
+  else
+    use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "Net: %s" "$ssid"
+  fi
+}
+
+# -----------------------------
+# Bluetooth status
+# Shows: Connected (with device count) / On (powered but not connected) / Off
+# -----------------------------
+bluetooth_part() {
+  if ! has_bin "$BLUETOOTHCTL"; then
+    use_icons && printf "%s n/a" "$(icon_bt)" || printf "BT: n/a"
+    return
+  fi
+
+  local powered connected_count
+
+  # Check if bluetooth is powered on
+  powered=$("$BLUETOOTHCTL" show 2>/dev/null | "$GREP" "Powered:" | "$AWK" '{print $2}' || echo "no")
+
+  if [ "$powered" != "yes" ]; then
+    use_icons && printf "%s Off" "$(icon_bt)" || printf "BT: Off"
+    return
+  fi
+
+  # Count connected devices
+  connected_count=$("$BLUETOOTHCTL" devices Connected 2>/dev/null | wc -l || echo 0)
+
+  if [ "$connected_count" -gt 0 ]; then
+    use_icons && printf "%s Connected" "$(icon_bt)" || printf "BT: Connected"
+  else
+    use_icons && printf "%s On" "$(icon_bt)" || printf "BT: On"
+  fi
+}
+
+# -----------------------------
+# Music player status (via playerctl - works with cmus/spotify/mpv)
+# Only shown when something is playing or paused
+# -----------------------------
+music_part() {
+  if ! has_bin "$PLAYERCTL"; then
+    return # Don't show anything if playerctl not available
+  fi
+
+  local status artist title output
+
+  # Get player status (Playing/Paused/Stopped)
+  status=$("$PLAYERCTL" status 2>/dev/null || true)
+
+  # Don't show anything if no player or stopped
+  if [ -z "$status" ] || [ "$status" = "Stopped" ]; then
+    return
+  fi
+
+  # Get metadata
+  artist=$("$PLAYERCTL" metadata artist 2>/dev/null || echo "Unknown")
+  title=$("$PLAYERCTL" metadata title 2>/dev/null || echo "Unknown")
+
+  # Format: Artist - Title (truncated to 30 chars)
+  output="${artist} - ${title}"
+  if [ ${#output} -gt 30 ]; then
+    output="${output:0:27}..."
+  fi
+
+  if [ "$status" = "Playing" ]; then
+    use_icons && printf "%s %s" "$(icon_music)" "$output" || printf "♫ %s" "$output"
+  else
+    use_icons && printf "%s Paused" "$(icon_music)" || printf "♫ Paused"
+  fi
 }
 
 # -----------------------------
@@ -200,9 +361,9 @@ nextcloud_part() {
       fi
     else
       # Heuristic via qdbus (optional)
-      if has_cmd qdbus && qdbus | $GREP -q "org.nextcloud"; then
+      if has_cmd qdbus && qdbus 2>/dev/null | $GREP -q "org.nextcloud"; then
         local bus
-        bus=$(qdbus | $GREP org.nextcloud | head -n1 || true)
+        bus=$(qdbus 2>/dev/null | $GREP org.nextcloud | head -n1 || true)
         if [ -n "$bus" ] && qdbus "$bus" 2>/dev/null | $GREP -iq "Transfer"; then
           state="syncing"
         fi
@@ -226,6 +387,70 @@ nextcloud_part() {
 }
 
 # -----------------------------
+# System updates available
+# Caches result to avoid slow checkupdates on every refresh
+# Only shown if updates are available
+# -----------------------------
+UPDATES_CACHE_FILE="/tmp/dwm-status-updates-$USER"
+UPDATES_CACHE_TIME=0
+
+updates_part() {
+  if ! has_bin "$CHECKUPDATES"; then
+    return # Don't show anything if checkupdates not available
+  fi
+
+  local now count
+  now=$(date +%s)
+
+  # Check if cache is still valid
+  if [ -f "$UPDATES_CACHE_FILE" ] && [ "$UPDATES_CACHE_TIME" -gt 0 ]; then
+    if [ $((now - UPDATES_CACHE_TIME)) -lt "$UPDATES_CACHE" ]; then
+      count=$(cat "$UPDATES_CACHE_FILE" 2>/dev/null || echo 0)
+    fi
+  fi
+
+  # Refresh cache if needed
+  if [ -z "${count:-}" ]; then
+    count=$("$CHECKUPDATES" 2>/dev/null | wc -l || echo 0)
+
+    # Also check AUR if yay is available
+    if has_cmd yay; then
+      local aur_count
+      aur_count=$(yay -Qua 2>/dev/null | wc -l || echo 0)
+      count=$((count + aur_count))
+    fi
+
+    echo "$count" >"$UPDATES_CACHE_FILE"
+    UPDATES_CACHE_TIME=$now
+  fi
+
+  # Only show if there are updates
+  if [ "$count" -gt 0 ]; then
+    use_icons && printf "%s %s" "$(icon_updates)" "$count" || printf "Upd: %s" "$count"
+  fi
+}
+
+# -----------------------------
+# Disk usage warning
+# Only shown if usage exceeds threshold
+# -----------------------------
+disk_part() {
+  if ! has_bin "$DF"; then
+    return # Don't show anything if df not available
+  fi
+
+  local usage
+  # Get root filesystem usage percentage (without % sign)
+  usage=$("$DF" -h / 2>/dev/null | "$AWK" 'NR==2 {print $5}' | "$SED" 's/%//' || echo 0)
+
+  # Only show if above warning threshold
+  if [ "$usage" -ge "$((100 - DISK_WARN))" ]; then
+    local free_pct=$((100 - usage))
+    use_icons && printf "%s Disk: %s%%" "$(icon_disk)" "$free_pct" || printf "Disk!: %s%%" "$free_pct"
+  fi
+}
+
+# -----------------------------
 # Date / Time
 # -----------------------------
 date_part() { "$DATE" +"%Y-%m-%d w:%V"; }
@@ -236,12 +461,30 @@ time_part() { "$DATE" +"%H:%M"; }
 # -----------------------------
 build_line() {
   local parts=()
+  local music updates disk
+
+  # Always visible parts
   parts+=("$(volume_part)")
   parts+=("$(battery_part)")
+  parts+=("$(temp_part)")
   parts+=("$(ssid_part)")
+  parts+=("$(bluetooth_part)")
+
+  # Conditional parts (only shown when relevant)
+  music=$(music_part)
+  [ -n "$music" ] && parts+=("$music")
+
   parts+=("$(nextcloud_part)")
+
+  updates=$(updates_part)
+  [ -n "$updates" ] && parts+=("$updates")
+
+  disk=$(disk_part)
+  [ -n "$disk" ] && parts+=("$disk")
+
   parts+=("$(date_part)" "$(time_part)")
 
+  # Join with separator
   local line="${parts[0]:-}"
   local i
   for i in "${parts[@]:1}"; do
@@ -265,11 +508,39 @@ wait_for_wifi() {
 }
 
 # -----------------------------
-# Main loop
+# Cleanup function
+# -----------------------------
+cleanup() {
+  # Kill volume listener if it's running
+  if [ -n "${VOLUME_LISTENER_PID:-}" ]; then
+    kill "$VOLUME_LISTENER_PID" 2>/dev/null || true
+  fi
+  exit 0
+}
+
+trap cleanup EXIT INT TERM
+
+# -----------------------------
+# Main
 # -----------------------------
 wait_for_wifi
+
+# Start volume listener in background
+volume_listener $$ &
+VOLUME_LISTENER_PID=$!
+
+# Main loop
 INTERVAL=${DWM_STATUS_INTERVAL:-10}
 while :; do
   "$XSETROOT" -name "$(build_line)"
-  sleep "$INTERVAL"
+
+  # Wait for interval or signal
+  for i in $(seq 1 $INTERVAL); do
+    sleep 1
+    # Check if we got a signal for immediate update
+    if [ $FORCE_UPDATE -eq 1 ]; then
+      FORCE_UPDATE=0
+      "$XSETROOT" -name "$(build_line)"
+    fi
+  done
 done
