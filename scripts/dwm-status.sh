@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DWM status bar for Arch Linux
 # ------------------------------------------------------------
-# Shows (left → right): VOLUME | BATTERY | TEMP | WIFI-SSID+SIGNAL | BLUETOOTH | MUSIC | NEXTCLOUD | UPDATES | DISK | DATE | TIME
+# Shows (left → right): VOLUME | BATTERY | TEMP | WIFI | NEXTCLOUD | BLUETOOTH | MUSIC | UPDATES | DISK | DATE | TIME
 # The bar is resilient: each part tolerates missing tools and falls back to "n/a".
 #
 # Design goals:
@@ -11,6 +11,7 @@
 # - Minimal dependencies; graceful degradation.
 # - Event-driven volume updates (fast response to volume key presses).
 # - Dynamic parts: music, updates, disk only shown when relevant.
+# - Hardware adaptive: battery, WiFi, and Bluetooth only shown if hardware exists.
 #
 # Dependencies (install if missing):
 #   pacman-contrib  (for checkupdates)
@@ -56,12 +57,48 @@ TEMP_WARN=${DWM_STATUS_TEMP_WARN:-75}
 DISK_WARN=${DWM_STATUS_DISK_WARN:-15}
 UPDATES_CACHE=${DWM_STATUS_UPDATES_CACHE:-1800}
 
+# Hardware detection cache (set once at startup)
+HAS_BATTERY=""
+HAS_WIFI=""
+HAS_BLUETOOTH=""
+
 # -----------------------------
 # Helpers
 # -----------------------------
 has_cmd() { command -v "$1" >/dev/null 2>&1; } # PATH-based check
 has_bin() { [ -x "$1" ]; }                     # absolute-path check
 trim() { $SED 's/^[[:space:]]\+//;s/[[:space:]]\+$//'; }
+
+# -----------------------------
+# Hardware detection
+# -----------------------------
+detect_hardware() {
+  # Check for battery
+  if ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1; then
+    HAS_BATTERY="yes"
+  else
+    HAS_BATTERY="no"
+  fi
+
+  # Check for WiFi adapter
+  if ls /sys/class/net/wl* >/dev/null 2>&1 ||
+    [ -d /sys/class/ieee80211 ] ||
+    (has_bin "$NMCLI" && "$NMCLI" device 2>/dev/null | $GREP -q wifi) ||
+    (has_bin "$IW" && "$IW" dev 2>/dev/null | $GREP -q Interface); then
+    HAS_WIFI="yes"
+  else
+    HAS_WIFI="no"
+  fi
+
+  # Check for Bluetooth
+  if [ -d /sys/class/bluetooth ] && ls /sys/class/bluetooth/hci* >/dev/null 2>&1; then
+    HAS_BLUETOOTH="yes"
+  elif has_bin "$BLUETOOTHCTL" && "$BLUETOOTHCTL" show 2>/dev/null | $GREP -q "Controller"; then
+    HAS_BLUETOOTH="yes"
+  else
+    HAS_BLUETOOTH="no"
+  fi
+}
 
 # -----------------------------
 # Icon / text mode
@@ -147,8 +184,14 @@ volume_listener() {
 
 # -----------------------------
 # Battery (AC + level + icon)
+# Only shown if battery hardware exists
 # -----------------------------
 battery_part() {
+  # Skip if no battery hardware
+  if [ "$HAS_BATTERY" = "no" ]; then
+    return
+  fi
+
   local dir ac cap stat online glyph
   dir=$(ls -d /sys/class/power_supply/BAT* 2>/dev/null | head -n1 || true)
   ac=$(ls -d /sys/class/power_supply/AC* /sys/class/power_supply/ACAD* 2>/dev/null | head -n1 || true)
@@ -214,8 +257,14 @@ temp_part() {
 # -----------------------------
 # Wi-Fi SSID + Signal Strength
 # Uses nmcli for both SSID and signal percentage
+# Only shown if WiFi hardware exists
 # -----------------------------
 ssid_part() {
+  # Skip if no WiFi hardware
+  if [ "$HAS_WIFI" = "no" ]; then
+    return
+  fi
+
   local ssid="" signal="" forced=${DWM_STATUS_WIFI_CMD:-}
   local tries
 
@@ -253,46 +302,51 @@ ssid_part() {
       local dbm
       dbm=$("$IW" dev "$dev" link 2>/dev/null | "$GREP" 'signal:' | "$AWK" '{print $2}' || true)
       if [ -n "$dbm" ]; then
-        # Rough conversion: -90 dBm = 0%, -30 dBm = 100%
-        signal=$($AWK -v d="$dbm" 'BEGIN{s=2*(d+100); if(s<0)s=0; if(s>100)s=100; printf("%d",s)}')
+        # Convert dBm to approximate % (rough formula)
+        # dBm range typically: -30 (excellent) to -90 (poor)
+        signal=$($AWK -v d="$dbm" 'BEGIN{s=2*(d+100); if(s>100)s=100; if(s<0)s=0; printf("%d",s)}')
       fi
     fi
   fi
 
-  [ -z "$ssid" ] && ssid="n/a"
-
-  if [ -n "$signal" ]; then
-    use_icons && printf "%s %s %s%%" "$(icon_wifi)" "$ssid" "$signal" || printf "Net: %s %s%%" "$ssid" "$signal"
+  # Format output
+  if [ -n "$ssid" ]; then
+    if [ -n "$signal" ]; then
+      use_icons && printf "%s %s %s%%" "$(icon_wifi)" "$ssid" "$signal" || printf "WiFi: %s %s%%" "$ssid" "$signal"
+    else
+      use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "WiFi: %s" "$ssid"
+    fi
   else
-    use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "Net: %s" "$ssid"
+    use_icons && printf "%s n/a" "$(icon_wifi)" || printf "WiFi: n/a"
   fi
 }
 
 # -----------------------------
-# Bluetooth status
-# Shows: Connected (with device count) / On (powered but not connected) / Off
+# Bluetooth (on/off + device count)
+# Only shown if Bluetooth hardware exists
 # -----------------------------
 bluetooth_part() {
-  if ! has_bin "$BLUETOOTHCTL"; then
-    use_icons && printf "%s n/a" "$(icon_bt)" || printf "BT: n/a"
+  # Skip if no Bluetooth hardware
+  if [ "$HAS_BLUETOOTH" = "no" ]; then
     return
   fi
 
-  local powered connected_count
+  if ! has_bin "$BLUETOOTHCTL"; then
+    return # Don't show if bluetoothctl not available
+  fi
 
-  # Check if bluetooth is powered on
-  powered=$("$BLUETOOTHCTL" show 2>/dev/null | "$GREP" "Powered:" | "$AWK" '{print $2}' || echo "no")
+  local powered devices
+  powered=$("$BLUETOOTHCTL" show 2>/dev/null | $GREP "Powered:" | $AWK '{print $2}' || echo "no")
 
   if [ "$powered" != "yes" ]; then
-    use_icons && printf "%s Off" "$(icon_bt)" || printf "BT: Off"
-    return
+    return # Don't show if Bluetooth is off
   fi
 
   # Count connected devices
-  connected_count=$("$BLUETOOTHCTL" devices Connected 2>/dev/null | wc -l || echo 0)
+  devices=$("$BLUETOOTHCTL" devices Connected 2>/dev/null | wc -l || echo 0)
 
-  if [ "$connected_count" -gt 0 ]; then
-    use_icons && printf "%s Connected" "$(icon_bt)" || printf "BT: Connected"
+  if [ "$devices" -gt 0 ]; then
+    use_icons && printf "%s %s" "$(icon_bt)" "$devices" || printf "BT: %s" "$devices"
   else
     use_icons && printf "%s On" "$(icon_bt)" || printf "BT: On"
   fi
@@ -461,20 +515,31 @@ time_part() { "$DATE" +"%H:%M"; }
 # -----------------------------
 build_line() {
   local parts=()
-  local music updates disk
+  local battery wifi bluetooth music updates disk
 
   # Always visible parts
   parts+=("$(volume_part)")
-  parts+=("$(battery_part)")
+
+  # Battery (only if hardware exists)
+  battery=$(battery_part)
+  [ -n "$battery" ] && parts+=("$battery")
+
   parts+=("$(temp_part)")
-  parts+=("$(ssid_part)")
-  parts+=("$(bluetooth_part)")
+
+  # WiFi (only if hardware exists)
+  wifi=$(ssid_part)
+  [ -n "$wifi" ] && parts+=("$wifi")
+
+  # Nextcloud (always shown, placed next to WiFi when WiFi exists)
+  parts+=("$(nextcloud_part)")
+
+  # Bluetooth (only if hardware exists)
+  bluetooth=$(bluetooth_part)
+  [ -n "$bluetooth" ] && parts+=("$bluetooth")
 
   # Conditional parts (only shown when relevant)
   music=$(music_part)
   [ -n "$music" ] && parts+=("$music")
-
-  parts+=("$(nextcloud_part)")
 
   updates=$(updates_part)
   [ -n "$updates" ] && parts+=("$updates")
@@ -498,6 +563,11 @@ build_line() {
 # (Prevents 'n/a' at boot when NetworkManager isn't ready yet.)
 # -----------------------------
 wait_for_wifi() {
+  # Skip waiting if no WiFi hardware
+  if [ "$HAS_WIFI" = "no" ]; then
+    return 0
+  fi
+
   local tries=0 max=30
   if ! has_bin "$NMCLI"; then return 0; fi
   while ! "$NMCLI" -t -f STATE g 2>/dev/null | $GREP -q '^connected'; do
@@ -523,6 +593,9 @@ trap cleanup EXIT INT TERM
 # -----------------------------
 # Main
 # -----------------------------
+# Detect hardware at startup
+detect_hardware
+
 wait_for_wifi
 
 # Start volume listener in background
