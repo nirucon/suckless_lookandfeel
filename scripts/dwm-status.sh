@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # DWM status bar for Arch Linux
 # ------------------------------------------------------------
-# Shows (left → right): VOLUME | BATTERY | TEMP | WIFI | NEXTCLOUD | BLUETOOTH | MUSIC | UPDATES | DISK | DATE | TIME
+# Shows (left → right): CLIPBOARD | VOLUME | BATTERY | TEMP | WIFI | NEXTCLOUD | BLUETOOTH | MUSIC | UPDATES | DISK | DATE | TIME
 # The bar is resilient: each part tolerates missing tools and falls back to "n/a".
 #
 # Design goals:
@@ -129,6 +129,7 @@ icon_temp() { echo -ne '\uf2db'; }       # temperature
 icon_fire() { echo -ne '\U1f525'; }      # temperature warning
 icon_updates() { echo -ne '\u2191'; }    # updates available
 icon_disk() { echo -ne '\u26a0'; }       # disk warning
+icon_clip() { echo -ne '\uf0ea'; }       # clipboard
 icon_sep() { echo -ne ' | '; }           # separator
 
 # -----------------------------
@@ -505,6 +506,14 @@ disk_part() {
 }
 
 # -----------------------------
+# Clipboard history
+# Always visible
+# -----------------------------
+clipboard_part() {
+  use_icons && printf "%s" "$(icon_clip)" || printf "CLIP"
+}
+
+# -----------------------------
 # Date / Time
 # -----------------------------
 date_part() { "$DATE" +"%Y-%m-%d w:%V"; }
@@ -516,6 +525,9 @@ time_part() { "$DATE" +"%H:%M"; }
 build_line() {
   local parts=()
   local battery wifi bluetooth music updates disk
+
+  # Clipboard (always first)
+  parts+=("$(clipboard_part)")
 
   # Always visible parts
   parts+=("$(volume_part)")
