@@ -168,17 +168,31 @@ volume_part() {
 # -----------------------------
 # Volume event listener (background process)
 # Monitors PipeWire/PulseAudio events and sends SIGUSR1 to main process
+# Resilient to suspend/resume: auto-restarts if connection breaks
 # -----------------------------
 volume_listener() {
   local main_pid=$1
   if ! has_bin "$PACTL"; then return; fi
 
-  # pactl subscribe gives us real-time audio events
-  "$PACTL" subscribe 2>/dev/null | while read -r line; do
-    # Look for sink (output device) changes
-    if printf '%s' "$line" | $GREP -qi "sink"; then
-      # Send signal to main process for immediate update
-      kill -SIGUSR1 "$main_pid" 2>/dev/null || exit 0
+  # Infinite restart loop to handle suspend/resume
+  while true; do
+    # pactl subscribe gives us real-time audio events
+    # This will block until audio events occur, or exit if pipe breaks
+    "$PACTL" subscribe 2>/dev/null | while read -r line; do
+      # Look for sink (output device) changes
+      if printf '%s' "$line" | $GREP -qi "sink"; then
+        # Send signal to main process for immediate update
+        kill -SIGUSR1 "$main_pid" 2>/dev/null || exit 0
+      fi
+    done
+
+    # If we get here, pactl subscribe exited (likely due to suspend/resume)
+    # Wait a bit before restarting to avoid tight restart loop
+    sleep 2
+
+    # Check if main process still exists before restarting
+    if ! kill -0 "$main_pid" 2>/dev/null; then
+      exit 0
     fi
   done
 }
@@ -517,13 +531,13 @@ disk_part() {
 # -----------------------------
 # Clipboard history
 # Shows icon with optional counters for activity
-# Format: 📋 (no activity), 📋 3 (3 text clips), 📋 3/2 (3 text + 2 screenshots)
+# Format: 📋 (no activity), 📋 3 (3 text clips), 📋 5/2 (5 text + 2 screenshots)
 # -----------------------------
 clipboard_part() {
   local text_count=0
   local screenshot_count=0
 
-  # Count text clips (all entries in history, max 50 due to clip-save.sh trimming)
+  # Count text clips (max 5 entries due to clip-save.sh trimming)
   if [ -f "$HOME/.cache/clip-text.log" ]; then
     text_count=$(wc -l <"$HOME/.cache/clip-text.log" 2>/dev/null || echo 0)
   fi
@@ -650,6 +664,7 @@ VOLUME_LISTENER_PID=$!
 
 # Main loop
 INTERVAL=${DWM_STATUS_INTERVAL:-10}
+LOOP_COUNT=0
 while :; do
   "$XSETROOT" -name "$(build_line)"
 
@@ -662,4 +677,16 @@ while :; do
       "$XSETROOT" -name "$(build_line)"
     fi
   done
+
+  # Every ~5 minutes, check if volume listener is still alive and restart if needed
+  LOOP_COUNT=$((LOOP_COUNT + 1))
+  if [ $((LOOP_COUNT % 30)) -eq 0 ]; then
+    if [ -n "${VOLUME_LISTENER_PID:-}" ]; then
+      if ! kill -0 "$VOLUME_LISTENER_PID" 2>/dev/null; then
+        # Volume listener died, restart it
+        volume_listener $$ &
+        VOLUME_LISTENER_PID=$!
+      fi
+    fi
+  fi
 done

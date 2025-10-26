@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Clipboard history menu for dwm
-# Shows text history + screenshot history in dmenu
+# Shows text history (with timestamps + 20 char preview) + screenshot history in dmenu
 # Dependencies: xclip, sxiv, dmenu
 
 set -euo pipefail
@@ -18,24 +18,30 @@ trap 'rm -f "$MENU_FILE"' EXIT
 
 # Build menu
 {
-  echo "━━━ TEXT (5 latest) ━━━"
+  echo "━━━ TEXT (last 5) ━━━"
 
-  # Get last 5 text entries (newest first)
+  # Get all text entries (newest first, max 5)
   if [ -s "$CLIP_HISTORY" ]; then
-    tail -n 5 "$CLIP_HISTORY" | tac | while IFS= read -r line; do
+    tac "$CLIP_HISTORY" | while IFS='|' read -r timestamp text; do
+      # Trim whitespace from text
+      text=$(echo "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
       # Truncate to 60 chars for display
-      if [ ${#line} -gt 60 ]; then
-        echo "📝 ${line:0:57}..."
+      if [ ${#text} -gt 60 ]; then
+        preview="${text:0:60}..."
       else
-        echo "📝 $line"
+        preview="$text"
       fi
+
+      # Format: 📝 YYYY-MM-DD HH:MM - preview
+      echo "📝 $timestamp - $preview"
     done
   else
     echo "  (no history)"
   fi
 
   echo ""
-  echo "━━━ SCREENSHOTS (5 latest) ━━━"
+  echo "━━━ SCREENSHOTS (last 5) ━━━"
 
   # Get last 5 screenshots (newest first)
   # Use -L to follow symlinks
@@ -61,20 +67,32 @@ fi
 
 # Process selection
 if [[ "$selection" =~ ^📝 ]]; then
-  # Text selection - find full text from history
-  display_text="${selection#📝 }"                                 # Remove emoji prefix
-  display_text="${display_text%...}"                             # Remove trailing ...
-  display_text=$(echo "$display_text" | sed 's/^[[:space:]]*//') # Trim leading spaces
+  # Text selection - extract timestamp from selection
+  # Format: "📝 YYYY-MM-DD HH:MM - preview..."
+  # We need to find the matching line in history by timestamp
 
-  # Find matching line in history (search from end)
-  full_text=$(tac "$CLIP_HISTORY" | grep -F "$display_text" | head -n1 || echo "")
+  # Extract timestamp from selection (remove emoji and everything after " - ")
+  selected_timestamp=$(echo "$selection" | sed -E 's/^📝[[:space:]]+([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}).*/\1/')
+
+  # Find full text from history by matching timestamp
+  # Read in same order as displayed (newest first)
+  full_text=""
+  while IFS='|' read -r timestamp text; do
+    # Trim timestamp
+    timestamp=$(echo "$timestamp" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if [ "$timestamp" = "$selected_timestamp" ]; then
+      # Found matching entry, get full text
+      full_text=$(echo "$text" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      break
+    fi
+  done < <(tac "$CLIP_HISTORY")
 
   if [ -n "$full_text" ]; then
     # Copy to clipboard
     echo -n "$full_text" | xclip -selection clipboard
-    notify-send "Clipboard" "Text copied to clipboard"
+    notify-send "Clipboard" "Text copied"
   else
-    notify-send "Clipboard" "Can't find complete text"
+    notify-send "Clipboard" "Could not find text"
   fi
 
 elif [[ "$selection" =~ ^🖼️ ]]; then
@@ -83,9 +101,13 @@ elif [[ "$selection" =~ ^🖼️ ]]; then
   filepath="$SCREENSHOT_DIR/$filename"
 
   if [ -f "$filepath" ]; then
+    # Copy image to clipboard
+    xclip -selection clipboard -t image/png -i "$filepath"
+    notify-send "Clipboard" "Image copied to clipboard"
+
     # Open in sxiv
     sxiv "$filepath" &
   else
-    notify-send "Clipboard" "Can't find file: $filename"
+    notify-send "Clipboard" "Could not find file: $filename"
   fi
 fi
