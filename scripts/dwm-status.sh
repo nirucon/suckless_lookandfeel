@@ -472,11 +472,15 @@ updates_part() {
   # Refresh cache if needed
   if [ -z "${count:-}" ]; then
     count=$("$checkupdates_bin" 2>/dev/null | wc -l || echo 0)
+    count=${count:-0}                    # Ensure it's a number
+    count=$(echo "$count" | tr -d ' \n') # Remove whitespace
 
     # Also check AUR if yay is available
     if has_cmd yay; then
       local aur_count
       aur_count=$(yay -Qua 2>/dev/null | wc -l || echo 0)
+      aur_count=${aur_count:-0}                    # Ensure it's a number
+      aur_count=$(echo "$aur_count" | tr -d ' \n') # Remove whitespace
       count=$((count + aur_count))
     fi
 
