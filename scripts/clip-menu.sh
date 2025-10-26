@@ -18,7 +18,7 @@ trap 'rm -f "$MENU_FILE"' EXIT
 
 # Build menu
 {
-  echo "━━━ TEXT (5 senaste) ━━━"
+  echo "━━━ TEXT (5 latest) ━━━"
 
   # Get last 5 text entries (newest first)
   if [ -s "$CLIP_HISTORY" ]; then
@@ -31,11 +31,11 @@ trap 'rm -f "$MENU_FILE"' EXIT
       fi
     done
   else
-    echo "  (ingen historik)"
+    echo "  (no history)"
   fi
 
   echo ""
-  echo "━━━ SCREENSHOTS (5 senaste) ━━━"
+  echo "━━━ SCREENSHOTS (5 latest) ━━━"
 
   # Get last 5 screenshots (newest first)
   # Use -L to follow symlinks
@@ -47,7 +47,7 @@ trap 'rm -f "$MENU_FILE"' EXIT
       echo "🖼️  $filename ($size)"
     done
   else
-    echo "  (inga screenshots)"
+    echo "  (no screenshots)"
   fi
 } >"$MENU_FILE"
 
@@ -72,9 +72,9 @@ if [[ "$selection" =~ ^📝 ]]; then
   if [ -n "$full_text" ]; then
     # Copy to clipboard
     echo -n "$full_text" | xclip -selection clipboard
-    notify-send "Clipboard" "Text kopierad till clipboard"
+    notify-send "Clipboard" "Text copied to clipboard"
   else
-    notify-send "Clipboard" "Kunde inte hitta fullständig text"
+    notify-send "Clipboard" "Can't find complete text"
   fi
 
 elif [[ "$selection" =~ ^🖼️ ]]; then
@@ -86,6 +86,6 @@ elif [[ "$selection" =~ ^🖼️ ]]; then
     # Open in sxiv
     sxiv "$filepath" &
   else
-    notify-send "Clipboard" "Kunde inte hitta filen: $filename"
+    notify-send "Clipboard" "Can't find file: $filename"
   fi
 fi

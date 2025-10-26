@@ -25,7 +25,7 @@
 #   DWM_STATUS_NET_PING=1.1.1.1        # ping target for connectivity (default 1.1.1.1)
 #   DWM_STATUS_TEMP_WARN=75   # CPU temp warning threshold (°C)
 #   DWM_STATUS_DISK_WARN=15   # Disk usage warning threshold (%)
-#   DWM_STATUS_UPDATES_CACHE=1800  # Updates cache time (seconds, default 30min)
+#   DWM_STATUS_UPDATES_CACHE=900   # Updates cache time (seconds, default 15min)
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -55,7 +55,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 # -----------------------------
 TEMP_WARN=${DWM_STATUS_TEMP_WARN:-75}
 DISK_WARN=${DWM_STATUS_DISK_WARN:-15}
-UPDATES_CACHE=${DWM_STATUS_UPDATES_CACHE:-1800}
+UPDATES_CACHE=${DWM_STATUS_UPDATES_CACHE:-900} # 15 min cache (was 30 min)
 
 # Hardware detection cache (set once at startup)
 HAS_BATTERY=""
@@ -450,23 +450,28 @@ UPDATES_CACHE_FILE="/tmp/dwm-status-updates-$USER"
 UPDATES_CACHE_TIME=0
 
 updates_part() {
-  if ! has_bin "$CHECKUPDATES"; then
-    return # Don't show anything if checkupdates not available
+  # Find checkupdates dynamically (handles different install locations)
+  local checkupdates_bin
+  checkupdates_bin=$(command -v checkupdates 2>/dev/null)
+
+  if [ -z "$checkupdates_bin" ]; then
+    return # checkupdates not available
   fi
 
   local now count
   now=$(date +%s)
 
   # Check if cache is still valid
-  if [ -f "$UPDATES_CACHE_FILE" ] && [ "$UPDATES_CACHE_TIME" -gt 0 ]; then
-    if [ $((now - UPDATES_CACHE_TIME)) -lt "$UPDATES_CACHE" ]; then
+  if [ -f "$UPDATES_CACHE_FILE" ] && [ "${UPDATES_CACHE_TIME:-0}" -gt 0 ]; then
+    local cache_age=$((now - UPDATES_CACHE_TIME))
+    if [ "$cache_age" -lt "$UPDATES_CACHE" ]; then
       count=$(cat "$UPDATES_CACHE_FILE" 2>/dev/null || echo 0)
     fi
   fi
 
   # Refresh cache if needed
   if [ -z "${count:-}" ]; then
-    count=$("$CHECKUPDATES" 2>/dev/null | wc -l || echo 0)
+    count=$("$checkupdates_bin" 2>/dev/null | wc -l || echo 0)
 
     # Also check AUR if yay is available
     if has_cmd yay; then
@@ -507,10 +512,35 @@ disk_part() {
 
 # -----------------------------
 # Clipboard history
-# Always visible
+# Shows icon with optional counters for activity
+# Format: 📋 (no activity), 📋 3 (3 text clips), 📋 3/2 (3 text + 2 screenshots)
 # -----------------------------
 clipboard_part() {
-  use_icons && printf "%s" "$(icon_clip)" || printf "CLIP"
+  local text_count=0
+  local screenshot_count=0
+
+  # Count text clips (all entries in history, max 50 due to clip-save.sh trimming)
+  if [ -f "$HOME/.cache/clip-text.log" ]; then
+    text_count=$(wc -l <"$HOME/.cache/clip-text.log" 2>/dev/null || echo 0)
+  fi
+
+  # Count screenshots from last 24 hours
+  # Use -L to follow symlinks (handles ~/Pictures/Screenshots -> ~/Nextcloud/Screenshots)
+  if [ -d "$HOME/Pictures/Screenshots" ]; then
+    screenshot_count=$(find -L "$HOME/Pictures/Screenshots" -maxdepth 1 -type f -name "*.png" -mtime -1 2>/dev/null | wc -l)
+  fi
+
+  # Display format based on activity
+  if [ "$text_count" -eq 0 ] && [ "$screenshot_count" -eq 0 ]; then
+    # No activity
+    use_icons && printf "%s" "$(icon_clip)" || printf "CLIP"
+  elif [ "$screenshot_count" -eq 0 ]; then
+    # Only text clips
+    use_icons && printf "%s %d" "$(icon_clip)" "$text_count" || printf "CLIP: %d" "$text_count"
+  else
+    # Both text and screenshots
+    use_icons && printf "%s %d/%d" "$(icon_clip)" "$text_count" "$screenshot_count" || printf "CLIP: %d/%d" "$text_count" "$screenshot_count"
+  fi
 }
 
 # -----------------------------
