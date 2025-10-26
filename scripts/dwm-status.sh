@@ -12,6 +12,7 @@
 # - Event-driven volume updates (fast response to volume key presses).
 # - Dynamic parts: music, updates, disk only shown when relevant.
 # - Hardware adaptive: battery, WiFi, and Bluetooth only shown if hardware exists.
+# - Suspend/resume resilient: detects time jumps and updates immediately.
 #
 # Dependencies (install if missing):
 #   pacman-contrib  (for checkupdates)
@@ -256,12 +257,7 @@ temp_part() {
     use_icons && printf " n/a" || printf "Temp: n/a"
     return
   fi
-
-  # Read temp (in millidegrees) and convert to Celsius
-  temp_c=$(cat "$temp_file" 2>/dev/null || echo 0)
-  temp_c=$($AWK -v t="$temp_c" 'BEGIN{printf("%d", t/1000)}')
-
-  # Show warning icon if temp exceeds threshold
+  temp_c=$(($(cat "$temp_file" 2>/dev/null || echo 0) / 1000))
   if [ "$temp_c" -ge "$TEMP_WARN" ]; then
     use_icons && printf "%s %s°C" "$(icon_fire)" "$temp_c" || printf "Temp!: %s°C" "$temp_c"
   else
@@ -270,8 +266,7 @@ temp_part() {
 }
 
 # -----------------------------
-# Wi-Fi SSID + Signal Strength
-# Uses nmcli for both SSID and signal percentage
+# Wi-Fi SSID with signal strength
 # Only shown if WiFi hardware exists
 # -----------------------------
 ssid_part() {
@@ -280,64 +275,64 @@ ssid_part() {
     return
   fi
 
-  local ssid="" signal="" forced=${DWM_STATUS_WIFI_CMD:-}
-  local tries
+  local ssid signal
+  # Try nmcli first (active connection)
+  if has_bin "$NMCLI"; then
+    ssid=$("$NMCLI" -t -f NAME connection show --active 2>/dev/null |
+      $GREP -v '^lo$' | $GREP -v 'docker' | head -n1 | trim || true)
 
-  # 1) nmcli: read the active Wi-Fi connection name and signal
-  if has_bin "$NMCLI" && { [ -z "${forced:-}" ] || [ "$forced" = "nmcli" ]; }; then
-    for tries in 1 2 3; do
-      # Get active connection name
-      ssid=$("$NMCLI" -t -f NAME,TYPE connection show --active 2>/dev/null |
-        "$AWK" -F: '$2=="802-11-wireless"{print $1; exit}' || true)
+    # Get signal strength if we have an active WiFi connection
+    if [ -n "${ssid:-}" ]; then
+      # Get the active WiFi device
+      local wifi_dev
+      wifi_dev=$("$NMCLI" -t -f DEVICE,TYPE device status 2>/dev/null |
+        $GREP ':wifi$' | head -n1 | cut -d: -f1 || true)
 
-      # Get signal strength for active connection
-      if [ -n "$ssid" ]; then
-        signal=$("$NMCLI" -t -f IN-USE,SIGNAL dev wifi 2>/dev/null |
-          "$GREP" '^\*' | "$AWK" -F: '{print $2}' || true)
-        break
+      if [ -n "${wifi_dev:-}" ]; then
+        # Get signal strength (0-100)
+        signal=$("$NMCLI" -f IN-USE,SIGNAL device wifi list 2>/dev/null |
+          $GREP '^\*' | $AWK '{print $2}' || true)
       fi
-      sleep 1
-    done
+    fi
   fi
 
-  # 2) iwgetid fallback (no signal info available with this method)
-  if [ -z "$ssid" ] && [ "${forced:-}" = "iwgetid" ] && has_bin "$IWGETID"; then
-    ssid=$("$IWGETID" -r 2>/dev/null || true)
-  elif [ -z "$ssid" ] && has_bin "$IWGETID" && [ -z "${forced:-}" ]; then
-    ssid=$("$IWGETID" -r 2>/dev/null || true)
+  # Fall back to iwgetid for SSID if nmcli didn't work
+  if [ -z "${ssid:-}" ] && has_bin "$IWGETID"; then
+    ssid=$("$IWGETID" -r 2>/dev/null | trim || true)
   fi
 
-  # 3) iw fallback (can get signal in dBm, convert to %)
-  if [ -z "$ssid" ] && has_bin "$IW"; then
-    local dev
-    dev=$("$IW" dev 2>/dev/null | "$AWK" '/Interface/ {print $2; exit}' || true)
-    if [ -n "$dev" ]; then
-      ssid=$("$IW" dev "$dev" link 2>/dev/null | $SED -n 's/^[[:space:]]*SSID: //p' || true)
-      # Get signal in dBm and convert to approximate %
+  # Fall back to iw for signal strength if we don't have it yet
+  if [ -z "${signal:-}" ] && [ -n "${ssid:-}" ] && has_bin "$IW"; then
+    local wifi_dev
+    wifi_dev=$(ls /sys/class/net/wl* 2>/dev/null | head -n1 | xargs basename || true)
+    if [ -n "${wifi_dev:-}" ]; then
+      # Get signal in dBm and convert to approximate percentage
       local dbm
-      dbm=$("$IW" dev "$dev" link 2>/dev/null | "$GREP" 'signal:' | "$AWK" '{print $2}' || true)
-      if [ -n "$dbm" ]; then
-        # Convert dBm to approximate % (rough formula)
-        # dBm range typically: -30 (excellent) to -90 (poor)
-        signal=$($AWK -v d="$dbm" 'BEGIN{s=2*(d+100); if(s>100)s=100; if(s<0)s=0; printf("%d",s)}')
+      dbm=$("$IW" dev "$wifi_dev" link 2>/dev/null |
+        $GREP 'signal:' | $AWK '{print $2}' || true)
+      if [ -n "${dbm:-}" ]; then
+        # Convert dBm to percentage (roughly: -30dBm=100%, -90dBm=0%)
+        signal=$($AWK -v d="$dbm" 'BEGIN{
+          if (d >= -30) print 100
+          else if (d <= -90) print 0
+          else printf("%d", (d + 90) * 100 / 60)
+        }')
       fi
     fi
   fi
 
-  # Format output
-  if [ -n "$ssid" ]; then
-    if [ -n "$signal" ]; then
-      use_icons && printf "%s %s %s%%" "$(icon_wifi)" "$ssid" "$signal" || printf "WiFi: %s %s%%" "$ssid" "$signal"
-    else
-      use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "WiFi: %s" "$ssid"
-    fi
-  else
+  # Display result
+  if [ -z "${ssid:-}" ]; then
     use_icons && printf "%s n/a" "$(icon_wifi)" || printf "WiFi: n/a"
+  elif [ -n "${signal:-}" ] && [ "$signal" -gt 0 ] 2>/dev/null; then
+    use_icons && printf "%s %s %s%%" "$(icon_wifi)" "$ssid" "$signal" || printf "WiFi: %s %s%%" "$ssid" "$signal"
+  else
+    use_icons && printf "%s %s" "$(icon_wifi)" "$ssid" || printf "WiFi: %s" "$ssid"
   fi
 }
 
 # -----------------------------
-# Bluetooth (on/off + device count)
+# Bluetooth (connected devices)
 # Only shown if Bluetooth hardware exists
 # -----------------------------
 bluetooth_part() {
@@ -347,96 +342,85 @@ bluetooth_part() {
   fi
 
   if ! has_bin "$BLUETOOTHCTL"; then
-    return # Don't show if bluetoothctl not available
+    use_icons && printf "%s n/a" "$(icon_bt)" || printf "BT: n/a"
+    return
   fi
-
-  local powered devices
-  powered=$("$BLUETOOTHCTL" show 2>/dev/null | $GREP "Powered:" | $AWK '{print $2}' || echo "no")
-
-  if [ "$powered" != "yes" ]; then
-    return # Don't show if Bluetooth is off
-  fi
-
-  # Count connected devices
-  devices=$("$BLUETOOTHCTL" devices Connected 2>/dev/null | wc -l || echo 0)
-
+  local devices
+  devices=$("$BLUETOOTHCTL" devices Connected 2>/dev/null | wc -l)
   if [ "$devices" -gt 0 ]; then
     use_icons && printf "%s %s" "$(icon_bt)" "$devices" || printf "BT: %s" "$devices"
   else
-    use_icons && printf "%s On" "$(icon_bt)" || printf "BT: On"
+    use_icons && printf "%s off" "$(icon_bt)" || printf "BT: off"
   fi
 }
 
 # -----------------------------
-# Music player status (via playerctl - works with cmus/spotify/mpv)
-# Only shown when something is playing or paused
+# Music (what's playing via playerctl)
+# Only shown if music is playing
 # -----------------------------
 music_part() {
   if ! has_bin "$PLAYERCTL"; then
     return # Don't show anything if playerctl not available
   fi
-
-  local status artist title output
-
-  # Get player status (Playing/Paused/Stopped)
+  local status title artist out
+  # Get playback status (Playing/Paused/Stopped)
   status=$("$PLAYERCTL" status 2>/dev/null || true)
-
-  # Don't show anything if no player or stopped
-  if [ -z "$status" ] || [ "$status" = "Stopped" ]; then
-    return
+  if [ "$status" != "Playing" ]; then
+    return # Don't show anything if not playing
   fi
-
-  # Get metadata
-  artist=$("$PLAYERCTL" metadata artist 2>/dev/null || echo "Unknown")
-  title=$("$PLAYERCTL" metadata title 2>/dev/null || echo "Unknown")
-
-  # Format: Artist - Title (truncated to 30 chars)
-  output="${artist} - ${title}"
-  if [ ${#output} -gt 30 ]; then
-    output="${output:0:27}..."
+  # Get track info
+  title=$("$PLAYERCTL" metadata title 2>/dev/null | trim || true)
+  artist=$("$PLAYERCTL" metadata artist 2>/dev/null | trim || true)
+  if [ -z "$title" ]; then
+    return # No track info available
   fi
-
-  if [ "$status" = "Playing" ]; then
-    use_icons && printf "%s %s" "$(icon_music)" "$output" || printf "♫ %s" "$output"
+  # Build output (truncate if too long)
+  if [ -n "$artist" ]; then
+    out="$artist - $title"
   else
-    use_icons && printf "%s Paused" "$(icon_music)" || printf "♫ Paused"
+    out="$title"
   fi
+  # Truncate to reasonable length
+  if [ ${#out} -gt 40 ]; then
+    out="${out:0:37}..."
+  fi
+  use_icons && printf "%s %s" "$(icon_music)" "$out" || printf "Music: %s" "$out"
 }
 
 # -----------------------------
-# Internet (quick connectivity test)
-# -----------------------------
-net_online() {
-  local host=${DWM_STATUS_NET_PING:-1.1.1.1}
-  "$PING" -n -q -W 1 -c 1 "$host" >/dev/null 2>&1
-}
-
-# -----------------------------
-# Nextcloud status (CLI → D-Bus heuristic → fallback)
+# Nextcloud sync status
+# Checks if Nextcloud client is running and syncing
+# Always shown (placed next to WiFi when WiFi hardware exists)
 # -----------------------------
 nextcloud_part() {
-  local state="online"
-  if ! net_online; then
-    state="offline"
-  else
-    if has_cmd nextcloud; then
-      local s
-      s=$(nextcloud --status 2>/dev/null || true)
-      if printf '%s' "$s" | $GREP -Eiq '(sync(ing)?|busy|indexing|scanning|transferring)'; then
-        state="syncing"
-      elif printf '%s' "$s" | $GREP -Eiq '(disconnected|offline)'; then
-        # Internet looks fine but client claims offline → still show "online"
+  local state="offline"
+  local nc_pid nc_log last_line
+
+  # Check if Nextcloud client is running
+  nc_pid=$(pgrep -x nextcloud 2>/dev/null | head -n1 || true)
+
+  if [ -n "$nc_pid" ]; then
+    # Client is running - check sync status from log
+    nc_log="$HOME/.local/share/Nextcloud/logs/nextcloud.log"
+
+    if [ -f "$nc_log" ] && [ -r "$nc_log" ]; then
+      # Get last 50 lines and check for sync activity
+      last_line=$(tail -n 50 "$nc_log" 2>/dev/null | $GREP -i "sync\|upload\|download" | tail -n1 || true)
+
+      if [ -n "$last_line" ]; then
+        # Check if sync is active (within last 2 minutes)
+        if echo "$last_line" | $GREP -qi "starting\|running\|progress"; then
+          state="syncing"
+        else
+          state="online"
+        fi
+      else
+        # No recent sync activity in log, assume online
         state="online"
       fi
     else
-      # Heuristic via qdbus (optional)
-      if has_cmd qdbus && qdbus 2>/dev/null | $GREP -q "org.nextcloud"; then
-        local bus
-        bus=$(qdbus 2>/dev/null | $GREP org.nextcloud | head -n1 || true)
-        if [ -n "$bus" ] && qdbus "$bus" 2>/dev/null | $GREP -iq "Transfer"; then
-          state="syncing"
-        fi
-      fi
+      # Log file not found or not readable, but client is running
+      state="online"
     fi
   fi
 
@@ -662,21 +646,39 @@ wait_for_wifi
 volume_listener $$ &
 VOLUME_LISTENER_PID=$!
 
-# Main loop
+# Main loop with suspend/resume detection
 INTERVAL=${DWM_STATUS_INTERVAL:-10}
 LOOP_COUNT=0
-while :; do
-  "$XSETROOT" -name "$(build_line)"
+LAST_UPDATE=$(date +%s)
 
-  # Wait for interval or signal
-  for i in $(seq 1 $INTERVAL); do
-    sleep 1
-    # Check if we got a signal for immediate update
-    if [ $FORCE_UPDATE -eq 1 ]; then
-      FORCE_UPDATE=0
-      "$XSETROOT" -name "$(build_line)"
-    fi
-  done
+while :; do
+  NOW=$(date +%s)
+
+  # Detect time jump (suspend/resume or NTP adjustment)
+  # If more than 2*INTERVAL seconds passed, we likely resumed from suspend
+  TIME_DIFF=$((NOW - LAST_UPDATE))
+  if [ $TIME_DIFF -gt $((INTERVAL * 2)) ]; then
+    # System was suspended - update immediately
+    FORCE_UPDATE=1
+  fi
+
+  # Update the bar
+  "$XSETROOT" -name "$(build_line)"
+  LAST_UPDATE=$NOW
+
+  # Reset force update flag after use
+  if [ $FORCE_UPDATE -eq 1 ]; then
+    FORCE_UPDATE=0
+  fi
+
+  # Sleep with timeout using 'read' command which is interruptible
+  # This allows SIGUSR1 to interrupt the sleep for immediate volume updates
+  read -t $INTERVAL <> <(:) 2>/dev/null || true
+
+  # Check if we got a signal for immediate update during sleep
+  if [ $FORCE_UPDATE -eq 1 ]; then
+    continue # Skip to next iteration immediately
+  fi
 
   # Every ~5 minutes, check if volume listener is still alive and restart if needed
   LOOP_COUNT=$((LOOP_COUNT + 1))
