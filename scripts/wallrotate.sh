@@ -1,7 +1,7 @@
 #!/bin/bash
-# wallrotate.sh — Wallpaper daemon for DWM/X11 (via xinit)
+# wallrotate.sh – Wallpaper daemon for DWM/X11 (via xinit)
 # - No args  -> start daemon (15 min rotation)
-# - next     -> immediate random wallpaper (does not disturb daemon)
+# - next     -> immediate random wallpaper (random per monitor)
 # - random   -> alias for next
 set -euo pipefail
 
@@ -20,25 +20,45 @@ pick_random() {
     2>/dev/null | shuf -n1
 }
 
-# Apply wallpaper to all monitors using Nitrogen
+# Apply wallpaper to all monitors using feh
+# Each monitor gets a random wallpaper (not the same image on all monitors)
 apply_wallpaper() {
-  local img="$(pick_random || true)"
-  if [ -z "${img:-}" ]; then
-    log "⚠️  No images found in $W"
-    return 1
+  # Detect connected monitors
+  mapfile -t monitors < <(xrandr --listmonitors 2>/dev/null | awk 'NR>1 {print $NF}')
+  
+  if [ "${#monitors[@]}" -eq 0 ]; then
+    log "⚠️  No monitors detected, falling back to default"
+    local img="$(pick_random || true)"
+    if [ -z "${img:-}" ]; then
+      log "⚠️  No images found in $W"
+      return 1
+    fi
+    log "🖼️  Setting wallpaper: $img"
+    feh --no-fehbg --bg-fill "$img"
+    return 0
   fi
-  log "🖼️  Setting wallpaper: $img"
-
-  # Detect monitors
-  mapfile -t heads < <(xrandr --listmonitors 2>/dev/null | awk 'NR>1 {gsub(":","",$1); print $1}')
-
-  if [ "${#heads[@]}" -eq 0 ]; then
-    nitrogen --set-zoom-fill "$img" --save
-  else
-    for h in "${heads[@]}"; do
-      nitrogen --set-zoom-fill "$img" --head="$h" --save
-    done
-  fi
+  
+  # Build feh command with random image per monitor
+  local feh_cmd="feh --no-fehbg"
+  local img_list=()
+  
+  for mon in "${monitors[@]}"; do
+    local img="$(pick_random || true)"
+    if [ -z "${img:-}" ]; then
+      log "⚠️  No images found in $W"
+      return 1
+    fi
+    img_list+=("$img")
+  done
+  
+  # Log what we're setting
+  log "🖼️  Setting wallpapers (${#monitors[@]} monitors):"
+  for i in "${!monitors[@]}"; do
+    log "   ${monitors[$i]}: ${img_list[$i]}"
+  done
+  
+  # Execute feh with all images (feh handles monitor assignment automatically)
+  feh --no-fehbg --bg-fill "${img_list[@]}"
 }
 
 usage() {
@@ -46,7 +66,7 @@ usage() {
 Usage: $(basename "$0") [daemon|next|random]
 
   daemon       Start background rotation (default)
-  next/random  Immediately switch to a random wallpaper
+  next/random  Immediately switch to random wallpapers (different per monitor)
 
 Environment:
   WALLPAPER_DIR  Override wallpaper folder (default: $HOME/Pictures/Wallpapers)
@@ -66,7 +86,7 @@ daemon) ;;
   ;;
 esac
 
-# Daemon mode — single instance via flock
+# Daemon mode – single instance via flock
 exec 9>"$LOCK"
 if ! flock -n 9; then
   log "ℹ️  wallrotate.sh already running; exiting."
@@ -75,7 +95,7 @@ fi
 
 apply_wallpaper || true
 
-# Rotate every 900 seconds (15 min) — stable timing
+# Rotate every 900 seconds (15 min) – stable timing
 while :; do
   sleep 900 &
   spid=$!
