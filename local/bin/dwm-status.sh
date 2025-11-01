@@ -128,7 +128,7 @@ icon_bt() { echo -ne '\uf293'; }         # bluetooth
 icon_music() { echo -ne '\u266b'; }      # music playing
 icon_temp() { echo -ne '\uf2db'; }       # temperature
 icon_fire() { echo -ne '\U1f525'; }      # temperature warning
-icon_updates() { echo -ne '\u2191'; }    # updates available
+icon_updates() { echo -ne '\uf303'; }    # updates available
 icon_disk() { echo -ne '\u26a0'; }       # disk warning
 icon_clip() { echo -ne '\uf0ea'; }       # clipboard
 icon_sep() { echo -ne ' | '; }           # separator
