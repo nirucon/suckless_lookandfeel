@@ -1,29 +1,31 @@
-# Alacritty — MatteBlack (matchar din DWM)
-# Plats: ~/.config/alacritty/alacritty.toml
+# Alacritty Configuration for Nicklas Rudolfsson
+# https://github.com/nirucon
+# Theme: MatteBlack with Nord Blue accents, optimized for DWM
+# Location: ~/.config/alacritty/alacritty.toml
 
 [env]
 TERM = "alacritty"
 
 [window]
-# Liten, jämn “air gap” som passar DWM
+# Minimal, even padding that complements DWM's aesthetic
 padding.x = 6
 padding.y = 6
 dynamic_padding = true
 decorations = "Full"
-opacity = 1.0  # 1.0 = helt opakt (ändra till t.ex. 0.95 om du vill ha lätt glas)
+opacity = 0.90  # 1.0 = fully opaque (change to e.g. 0.95 for subtle transparency)
 dynamic_title = true
 
-# Wayland-användare kan sätta:
+# Wayland users can set:
 # [window]
-# startup_mode = "Windowed"  # eller "Maximized"/"Fullscreen"
-# blur = true                # funkar om din compositor stödjer det
+# startup_mode = "Windowed"  # or "Maximized"/"Fullscreen"
+# blur = true                # works if your compositor supports it
 
 [scrolling]
 history = 10000
 multiplier = 3
 
 [font]
-size = 6
+size = 5.5
 
 [font.normal]
 family = "JetBrainsMono Nerd Font"
@@ -37,7 +39,7 @@ style = "Bold"
 family = "JetBrainsMono Nerd Font"
 style = "Italic"
 
-# Finjustering om tecken ser för kompakta ut
+# Fine-tuning if characters appear too compact
 # [font.offset]
 # x = 0
 # y = 0
@@ -51,8 +53,8 @@ blinking = "Off"
 
 [bell]
 animation = "EaseOutExpo"
-duration = 0        # 0 = tyst, ingen flash
-color = "0x5a5a60"  # används bara om duration > 0
+duration = 0        # 0 = silent, no flash
+color = "0x5a5a60"  # only used if duration > 0
 
 [selection]
 semantic_escape_chars = ",│`|:\"' ()[]{}<>\t"
@@ -61,39 +63,42 @@ save_to_clipboard = true
 [mouse]
 hide_when_typing = true
 
-# --------- FÄRGER: MatteBlack + Nord Blue Accents ----------
+# --------- COLORS: MatteBlack + Nord Blue Accents ----------
 [colors.primary]
-background = "0x0f0f10"
-foreground = "0xe5e5e5"
+background = "0x0f0f10"  # Deep black background
+foreground = "0xe5e5e5"  # Light gray foreground
 
 [colors.cursor]
-text   = "0x0f0f10"
-cursor = "0xe5e5e5"
+text   = "0x0f0f10"  # Cursor text color
+cursor = "0xe5e5e5"  # Cursor block color
 
 [colors.selection]
-text       = "0xe5e5e5"
-background = "0x3a3a3d"
+text       = "0xe5e5e5"  # Selected text color
+background = "0x3a3a3d"  # Selection background
 
+# Normal colors - Nord blue palette mapped to standard positions
 [colors.normal]
-black   = "0x0f0f10"
-red     = "0x88c0d0"  # Nord blue - synlig!
-green   = "0x5e81ac"  # Mörkare blå
-yellow  = "0x81a1c1"  # Medium blå
-blue    = "0xa8a8a8"
-magenta = "0xe5e5e5"
-cyan    = "0x8fbcbb"  # Nord cyan - synlig!
-white   = "0xe5e5e5"
+black   = "0x0f0f10"  # Base black
+red     = "0x88c0d0"  # Nord blue - high visibility
+green   = "0x5e81ac"  # Darker blue
+yellow  = "0x81a1c1"  # Medium blue
+blue    = "0xa8a8a8"  # Gray
+magenta = "0xe5e5e5"  # Light gray
+cyan    = "0x8fbcbb"  # Nord cyan - high visibility
+white   = "0xe5e5e5"  # Light gray
 
+# Bright colors - matching Nord blue theme
 [colors.bright]
-black   = "0x0f0f10"
+black   = "0x0f0f10"  # Base black
 red     = "0x88c0d0"  # Nord blue
-green   = "0x5e81ac"  # Mörkare blå
-yellow  = "0x81a1c1"  # Medium blå
-blue    = "0xa8a8a8"
-magenta = "0xe5e5e5"
+green   = "0x5e81ac"  # Darker blue
+yellow  = "0x81a1c1"  # Medium blue
+blue    = "0xa8a8a8"  # Gray
+magenta = "0xe5e5e5"  # Light gray
 cyan    = "0x8fbcbb"  # Nord cyan
-white   = "0xe5e5e5"
+white   = "0xe5e5e5"  # Light gray
 
+# Hints (URL/path highlighting)
 [colors.hints.start]
 foreground = "0x0f0f10"
 background = "0x88c0d0"
@@ -102,42 +107,47 @@ background = "0x88c0d0"
 foreground = "0x88c0d0"
 background = "0x0f0f10"
 
-# --------- Smidiga keybinds ----------
-# Kopiera/klistra, zoom, nytt fönster m.m.
+# --------- Efficient Keybindings ----------
+# Copy/paste, zoom, new window, etc.
+
+# Copy selected text
 [[keyboard.bindings]]
 key = "C"
 mods = "Control|Shift"
 action = "Copy"
 
+# Paste from clipboard
 [[keyboard.bindings]]
 key = "V"
 mods = "Control|Shift"
 action = "Paste"
 
+# Increase font size
 [[keyboard.bindings]]
 key = "Equals"
 mods = "Control"
 action = "IncreaseFontSize"
 
+# Decrease font size
 [[keyboard.bindings]]
 key = "Minus"
 mods = "Control"
 action = "DecreaseFontSize"
 
+# Reset font size to default
 [[keyboard.bindings]]
 key = "Key0"
 mods = "Control"
 action = "ResetFontSize"
 
-# Ctrl+Shift+N för nytt Alacritty-fönster (bra i DWM)
+# Spawn new Alacritty instance (useful in DWM)
 [[keyboard.bindings]]
 key = "N"
 mods = "Control|Shift"
 action = "SpawnNewInstance"
 
-# Ctrl+Shift+S för snabb skärmdump (om grim/slurp finns i PATH)
+# Quick screenshot with grim/slurp (if available in PATH)
 # [[keyboard.bindings]]
 # key = "S"
 # mods = "Control|Shift"
 # command = { program = "grimshot", args = ["savecopy", "area"] }
-
