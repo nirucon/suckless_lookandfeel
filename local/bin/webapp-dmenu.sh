@@ -260,6 +260,7 @@ declare -a CATEGORY_PRIVATE=(
   "Facebook|https://www.facebook.com/"
   "Instagram|https://www.instagram.com/"
   "Claude (AI)|https://claude.ai/"
+  "Jellyfin|http://100.108.23.65:8096/"
   "DeepSeek (AI)|https://chat.deepseek.com/"
 )
 
