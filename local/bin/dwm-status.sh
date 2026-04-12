@@ -187,8 +187,14 @@ get_network() {
 get_battery() {
   [[ "$SHOW_BATTERY" -eq 1 ]] || return 0
 
+  # Visa bara batteri om systemet har ett riktigt BAT*-device (laptop)
+  if ! find /sys/class/power_supply -maxdepth 1 -type l -name 'BAT*' | grep -q .; then
+    return 0
+  fi
+
   local bat cap status icon charging=0
 
+  # Hitta första riktiga batteriet (robust mellan laptops)
   bat="$(
     for d in /sys/class/power_supply/*; do
       [[ -d "$d" ]] || continue
