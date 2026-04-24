@@ -34,8 +34,16 @@ SHOW_BLUETOOTH=0
 USE_ICONS=1
 SHOW_KERNEL=1
 SHOW_HOST=1
+SHOW_WEATHER=1
 SHOW_DATE=1
 SHOW_TIME=1
+
+# ── Weather ───────────────────────────────────────────────────────────────────
+WEATHER_CITY="Ljungskile"
+WEATHER_LAT="58.224"
+WEATHER_LON="11.918"
+WEATHER_TIMEZONE="Europe/Stockholm"
+WEATHER_INTERVAL_SECONDS=3600   # fetch at most once per hour
 
 # Media roots. Leave empty for auto-detect.
 MEDIA_MUSIC_DIR="/mnt/media/mp3"
@@ -61,6 +69,8 @@ NP_TEXT_FILE="$CACHE_DIR/nowplaying.text"
 NP_SEEN_FILE="$CACHE_DIR/nowplaying.seen"
 NP_OFFSET_FILE="$CACHE_DIR/nowplaying.offset"
 NP_PASSES_FILE="$CACHE_DIR/nowplaying.passes"
+WEATHER_CACHE_FILE="$CACHE_DIR/weather.json"
+WEATHER_CACHE_STAMP="$CACHE_DIR/weather.stamp"
 
 mkdir -p "$CACHE_DIR"
 
@@ -124,6 +134,63 @@ icon_load() {
 
 icon_play() {
   [[ "$USE_ICONS" -eq 1 ]] && printf '' || printf 'play'
+}
+
+
+wmo_emoji() {
+  case "$1" in
+    0)           printf '☀'  ;;
+    1|2|3)       printf '⛅' ;;
+    45|48)       printf '🌫' ;;
+    51|53|55)    printf '🌦' ;;
+    61|63|65)    printf '🌧' ;;
+    66|67)       printf '🌧' ;;
+    71|73|75|77) printf '🌨' ;;
+    80|81|82)    printf '🌦' ;;
+    85|86)       printf '❄'  ;;
+    95)          printf '⛈' ;;
+    96|99)       printf '⛈' ;;
+    *)           printf '?'  ;;
+  esac
+}
+
+get_weather() {
+  [[ "$SHOW_WEATHER" -eq 1 ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v jq   >/dev/null 2>&1 || return 0
+
+  local now stamp age json code temp emoji
+  now="$($DATEBIN +%s 2>/dev/null || printf '0')"
+  stamp=0
+
+  [[ -r "$WEATHER_CACHE_STAMP" ]] && \
+    stamp="$(tr -d '[:space:]' < "$WEATHER_CACHE_STAMP" 2>/dev/null || printf '0')"
+  [[ "$stamp" =~ ^[0-9]+$ ]] || stamp=0
+
+  age=$(( now - stamp ))
+
+  if [[ ! -r "$WEATHER_CACHE_FILE" || "$age" -ge "$WEATHER_INTERVAL_SECONDS" ]]; then
+    json="$(curl -sf --max-time 8 \
+      "https://api.open-meteo.com/v1/forecast?latitude=${WEATHER_LAT}&longitude=${WEATHER_LON}&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=${WEATHER_TIMEZONE}&forecast_days=1" \
+      2>/dev/null)" || true
+    if [[ -n "$json" ]] && printf '%s' "$json" | jq -e '.daily' >/dev/null 2>&1; then
+      printf '%s\n' "$json" > "$WEATHER_CACHE_FILE" 2>/dev/null || true
+      printf '%s\n' "$now"  > "$WEATHER_CACHE_STAMP" 2>/dev/null || true
+    fi
+  fi
+
+  [[ -r "$WEATHER_CACHE_FILE" ]] || return 0
+
+  code="$(jq -r '.daily.weathercode[0] // empty' "$WEATHER_CACHE_FILE" 2>/dev/null)"
+  temp="$(jq -r '
+    (.daily.temperature_2m_min[0] + .daily.temperature_2m_max[0]) / 2
+    | round
+  ' "$WEATHER_CACHE_FILE" 2>/dev/null)"
+
+  [[ -n "$code" && -n "$temp" ]] || return 0
+
+  emoji="$(wmo_emoji "$code")"
+  printf '%s %s°C' "$emoji" "$temp"
 }
 
 icon_battery_for_level() {
@@ -729,7 +796,7 @@ get_now_playing() {
 }
 
 build_status_line() {
-  local kernel host network battery temp updates media volume nowplaying memory uptime disk cpu load bluetooth datepart timepart
+  local kernel host weather network battery temp updates media volume nowplaying memory uptime disk cpu load bluetooth datepart timepart
   local -a parts=()
 
   kernel="$(get_kernel)"
@@ -747,6 +814,7 @@ build_status_line() {
   cpu="$(get_cpu || true)"
   load="$(get_load || true)"
   bluetooth="$(get_bluetooth || true)"
+  weather="$(get_weather || true)"
   datepart=""
   timepart=""
   [[ "$SHOW_DATE" -eq 1 ]] && datepart="$($DATEBIN '+%Y-%m-%d w%V')"
@@ -766,7 +834,7 @@ build_status_line() {
   [[ -n "${bluetooth:-}" ]] && parts+=("$bluetooth")
   [[ -n "${updates:-}" ]] && parts+=("$updates")
 
-  parts+=("$kernel" "$host" "$datepart" "$timepart")
+  [[ -n "${weather:-}" ]] && parts+=("$kernel" "$host" "$weather" "$datepart" "$timepart") || parts+=("$kernel" "$host" "$datepart" "$timepart")
 
   printf '[ %s ]' "$(printf '%s\n' "${parts[@]}" | paste -sd '|' - | sed 's/|/ | /g')"
 }
